@@ -1,0 +1,1246 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>单车滑行 Web Demo</title>
+  <style>
+    .star {
+      color: #FFD54F;
+      /* 柔和黄色，不刺眼 */
+      margin-right: 2px;
+      font-size: 1em;
+      /* 跟文字等大 */
+    }
+
+
+    .stage {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    .bottomHud {
+      position: absolute;
+      left: 50%;
+      top: 70%;
+      /* 大致在踏板上方一排；不准就 72~78 微调 */
+      transform: translateX(-50%);
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      pointer-events: auto;
+    }
+
+    /* HUD 按钮样式：红字 + 可点击感 */
+    .hudBtn {
+      cursor: pointer;
+      padding: 10px 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 80, 80, 0.55);
+      background: rgba(255, 80, 80, 0.10);
+      color: rgba(255, 80, 80, 0.95);
+      font-weight: 800;
+      letter-spacing: .5px;
+      user-select: none;
+      transition: transform .06s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease;
+    }
+
+    .hudBtn:hover {
+      background: rgba(255, 80, 80, 0.14);
+      border-color: rgba(255, 80, 80, 0.75);
+    }
+
+    .hudBtn:active {
+      transform: translateY(1px);
+    }
+
+    /* 刹车按住态（视觉反馈） */
+    .hudBtnDanger.active {
+      background: rgba(255, 80, 80, 0.28);
+      border-color: rgba(255, 80, 80, 0.95);
+      box-shadow: 0 0 16px rgba(255, 80, 80, 0.35);
+    }
+
+    .btnDanger.active {
+      background: rgba(255, 80, 80, 0.28);
+      border-color: rgba(255, 80, 80, 0.85);
+      box-shadow: 0 0 14px rgba(255, 80, 80, 0.45);
+    }
+
+    /* 底部按钮区（保持现有位置，仅提升可点击性） */
+    .bottomHud .btn {
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      border: 1px solid rgba(255, 80, 80, 0.55);
+      background: rgba(255, 80, 80, 0.10);
+      color: rgba(255, 80, 80, 0.95);
+      box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+      transition: transform .06s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease;
+    }
+
+    .bottomHud .btn:hover {
+      background: rgba(255, 80, 80, 0.14);
+      border-color: rgba(255, 80, 80, 0.75);
+    }
+
+    .bottomHud .btn:active {
+      transform: translateY(1px);
+    }
+
+    /* 刹车按住态：更红更亮 */
+    .bottomHud .btnDanger.active {
+      background: rgba(255, 80, 80, 0.28);
+      border-color: rgba(255, 80, 80, 0.95);
+      box-shadow: 0 0 16px rgba(255, 80, 80, 0.35);
+    }
+
+    /* 让“重置/轨迹”略弱一点（可选） */
+    .bottomHud .btn.secondary {
+      border-color: rgba(255, 120, 120, 0.35);
+      background: rgba(255, 120, 120, 0.08);
+      color: rgba(255, 120, 120, 0.90);
+    }
+
+    :root {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: #0b0f16;
+      color: #e8eefc;
+    }
+
+    .wrap {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 12px;
+      height: 100vh;
+      padding: 12px;
+      box-sizing: border-box;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(1200px 800px at 20% 20%, #142033, #070a10);
+      border-radius: 14px;
+    }
+
+    .panel {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 12px;
+      overflow: auto;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 8px 0;
+    }
+
+    .row label {
+      font-size: 13px;
+      opacity: .9;
+    }
+
+    .row input[type="number"] {
+      width: 120px;
+      padding: 6px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, .12);
+      background: rgba(0, 0, 0, .25);
+      color: #e8eefc;
+    }
+
+    .row input[type="range"] {
+      width: 170px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .kv {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 8px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.18);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .k {
+      opacity: .85;
+      font-size: 12px;
+    }
+
+    .v {
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+    }
+
+    .hint {
+      font-size: 12px;
+      opacity: .75;
+      line-height: 1.4;
+      margin-top: 10px;
+    }
+
+    .btn {
+      cursor: pointer;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, .12);
+      background: rgba(0, 0, 0, .22);
+      color: #e8eefc;
+      user-select: none;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btnDanger {
+      border-color: rgba(255, 120, 120, .35);
+      background: rgba(255, 120, 120, .10);
+    }
+
+    .badge {
+      font-size: 11px;
+      opacity: .85;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, .12);
+      background: rgba(0, 0, 0, .18);
+    }
+
+    .group-title {
+      margin-top: 14px;
+      margin-bottom: 6px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: #9fb7ff;
+      background: linear-gradient(90deg,
+          rgba(80, 120, 255, 0.18),
+          rgba(80, 120, 255, 0.04));
+      border: 1px solid rgba(120, 160, 255, 0.25);
+    }
+
+    /* ===== 中性灰白按钮（重置距离） ===== */
+    .hudBtnNeutral {
+      cursor: pointer;
+      padding: 10px 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(220, 220, 220, 0.35);
+      background: rgba(220, 220, 220, 0.10);
+      color: rgba(230, 230, 230, 0.90);
+      font-weight: 700;
+      letter-spacing: .5px;
+      transition: background .12s ease, border-color .12s ease, transform .06s ease;
+    }
+
+    .hudBtnNeutral:hover {
+      background: rgba(220, 220, 220, 0.18);
+      border-color: rgba(220, 220, 220, 0.55);
+    }
+
+    .hudBtnNeutral:active {
+      transform: translateY(1px);
+    }
+
+    /* ===== 轨迹开关：关闭态（灰） ===== */
+    .hudBtnToggle {
+      cursor: pointer;
+      padding: 10px 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(200, 200, 200, 0.35);
+      background: rgba(200, 200, 200, 0.10);
+      color: rgba(220, 220, 220, 0.90);
+      font-weight: 800;
+      letter-spacing: .5px;
+      transition: background .12s ease, border-color .12s ease, box-shadow .12s ease;
+    }
+
+    /* ===== 轨迹开关：开启态（绿） ===== */
+    .hudBtnToggle.on {
+      border-color: rgba(80, 220, 120, 0.75);
+      background: rgba(80, 220, 120, 0.18);
+      color: rgba(120, 255, 170, 0.95);
+      box-shadow: 0 0 14px rgba(80, 220, 120, 0.35);
+    }
+
+    /* 让控制行不把 label 挤窄到逐字换行 */
+    .panel .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: nowrap;
+      /* 不换行 */
+    }
+
+    .panel .row label {
+      flex: 0 0 84px;
+      /* 固定/最小宽度，避免竖排 */
+      white-space: nowrap;
+      /* 不允许“惯性值”拆字换行 */
+      line-height: 1.2;
+    }
+
+    /* 让右侧输入区占满剩余空间 */
+    .panel .row>div {
+      flex: 1 1 auto;
+      min-width: 0;
+      /* 允许内部控件在 flex 下正确收缩 */
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="stage">
+      <canvas id="c"></canvas>
+
+      <!-- 底部按钮（踏板上方一排） -->
+      <div class="bottomHud" id="bottomHud">
+        <button class="hudBtn hudBtnDanger" id="brakeBtn">刹车（按住）</button>
+
+        <button class="hudBtnNeutral" id="resetBtn">重置距离</button>
+
+        <button class="hudBtnToggle" id="toggleTrailBtn">显示轨迹</button>
+
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <label><span class="star">★</span> 惯性值</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input id="tauNum" type="number" min="0.2" max="12" step="0.1" value="2.5" />
+          <input id="tauRange" type="range" min="0.2" max="12" step="0.1" value="2.5" />
+        </div>
+      </div>
+
+      <div class="row">
+        <label><span class="star">★</span> 速度上限 vMax（m/s）</label>
+        <input id="vmaxNum" type="number" min="1" max="30" step="0.5" value="12" />
+      </div>
+
+      <div class="row">
+        <label>速度映射 scale（m/s per rad/s）</label>
+        <input id="scaleNum" type="number" min="0.1" max="5" step="0.1" value="1.2" />
+      </div>
+
+      <div class="row">
+        <label>eps（m/s）</label>
+        <input id="epsNum" type="number" min="0.01" max="0.5" step="0.01" value="0.05" />
+      </div>
+
+      <div class="row" style="align-items:flex-start;">
+        <div style="display:flex; flex-direction:column; gap:8px;">
+
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
+
+        </div>
+      </div>
+
+
+      <div class="grid" id="kv"></div>
+
+      <!-- ===== Unity/App 惯性滑行公式复制区（固定，不会被 JS 覆盖） ===== -->
+      <div style="margin-top:18px;">
+        <div class="group-title">Unity/App 惯性滑行公式（可直接复制）</div>
+        <textarea readonly style="
+            width:100%;
+            min-height:180px;
+            box-sizing:border-box;
+            padding:10px;
+            border-radius:12px;
+            border:1px solid rgba(255,255,255,.15);
+            background:rgba(0,0,0,.25);
+            color:#e8eefc;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size:12px;
+            line-height:1.4;
+          ">// ================================
+// Unity / App：硬件1s采样 + 惯性滑行（推荐实现）
+// 目标：
+// - 表现层移动永远用 v_used（由 v_hw 或滑行速度产生）
+// - 硬件侧停踩：v_hw 在采样时直接归0
+// - 停踩后：以停止瞬间速度 v0 开始滑行，直至 0
+// - 滑行距离 coastDistance 单独累计（用于 UI / 报告）
+// ================================
+
+// ---- 参数 ----
+public float tau = 2.5f;     // 惯性量（秒，越大越“滑”）
+public float gamma = 2.0f;   // 曲线指数（固定>1，尾段更陡）
+public float eps = 0.05f;    // 速度阈值（认为停止）
+public bool showTrail = true;
+
+// ---- 输入（来自硬件） ----
+// continuousSpeed: 每帧估算/或蓝牙更高频速度（如果只有1Hz也可直接用）
+// 但 v_hw 需要按 1 秒采样口径输出给表现层逻辑
+float continuousSpeed;   // m/s
+float v_hw = 0f;         // m/s（硬件1s上报口径）
+float lastNonZeroSpeed = 0f;
+
+// ---- 1s平均采样（方案B） ----
+float sampleAccum = 0f;  // 0~1s
+float vInt = 0f;         // ∫v dt
+float tInt = 0f;         // ∫dt
+
+// ---- 距离 ----
+float hardwareDistance = 0f; // 仅按 v_hw * 1s 累计（硬件口径）
+float gameDistance = 0f;     // 表现层按 v_used * dt 累计（表现口径）
+float coastDistance = 0f;    // 仅滑行阶段累计（用于 UI/报告）
+float totalDistanceForUI => hardwareDistance + coastDistance;
+
+// ---- 滑行状态机（边沿触发，防跳速） ----
+bool pedalingPrev = false;
+bool isCoasting = false;
+float coastT = 0f;
+float v0 = 0f;              // 停踩瞬间滑行初速
+float coastSpeed = 0f;       // 当前滑行速度
+float v_used = 0f;           // 表现层使用速度（驱动位移）
+
+// ---- 刹车（按住） ----
+bool braking = false;
+
+void Update()
+{
+    float dt = Time.deltaTime;
+
+    // ==========================
+    // 1) continuousSpeed 更新
+    //    - 如果你有更高频硬件速度，用它
+    //    - 如果只有1Hz v_hw，就让 continuousSpeed=v_hw 也能跑
+    // ==========================
+    // continuousSpeed = ...
+
+    // 1s平均积分（方案B）
+    vInt += continuousSpeed * dt;
+    tInt += dt;
+
+    // 1s采样
+    sampleAccum += dt;
+    if (sampleAccum >= 1f)
+    {
+        int steps = Mathf.FloorToInt(sampleAccum / 1f);
+        for (int i = 0; i < steps; i++)
+        {
+            float avg = (tInt > 0f) ? (vInt / tInt) : 0f;
+
+            // 硬件口径：停踩 -> 采样时直接归0
+            v_hw = (continuousSpeed > eps) ? avg : 0f;
+
+            if (v_hw > eps) lastNonZeroSpeed = v_hw;
+            hardwareDistance += v_hw * 1f;
+
+            // reset window
+            vInt = 0f;
+            tInt = 0f;
+        }
+        sampleAccum -= steps * 1f;
+    }
+
+    // ==========================
+    // 2) 刹车：立即停（并清掉v0，防松刹后继续滑）
+    // ==========================
+    if (braking)
+    {
+        v_hw = 0f;
+        v_used = 0f;
+        isCoasting = false;
+        coastT = 0f;
+        coastSpeed = 0f;
+        v0 = 0f;
+        lastNonZeroSpeed = 0f;
+        return; // 本帧不移动
+    }
+
+    // ==========================
+    // 3) 滑行状态机（边沿触发一次）
+    // ==========================
+    bool pedaling = (v_hw > eps);
+
+    // 进入滑行：只在 pedaling true -> false 的边沿触发
+    if (!pedaling && pedalingPrev)
+    {
+        if (lastNonZeroSpeed > eps)
+        {
+            isCoasting = true;
+            coastT = 0f;
+            v0 = lastNonZeroSpeed; // 滑行初速
+        }
+    }
+
+    // 踩踏恢复：退出滑行
+    if (pedaling)
+    {
+        isCoasting = false;
+        coastT = 0f;
+        coastSpeed = 0f;
+        v_used = v_hw;
+    }
+    else
+    {
+        if (isCoasting)
+        {
+            coastT += dt;
+            coastSpeed = v0 * Mathf.Exp(-Mathf.Pow(coastT / Mathf.Max(0.2f, tau), gamma));
+
+            if (coastSpeed < eps)
+            {
+                coastSpeed = 0f;
+                isCoasting = false;
+            }
+            v_used = coastSpeed;
+        }
+        else
+        {
+            v_used = 0f;
+        }
+    }
+
+    // ==========================
+    // 4) 表现层推进 & 距离累计
+    // ==========================
+    float delta = v_used * dt;
+    transform.position += transform.forward * delta;
+
+    gameDistance += delta;
+    if (isCoasting && v_used > 0f) coastDistance += delta;
+
+    pedalingPrev = pedaling;
+}
+</textarea>
+      </div>
+
+      <div class="hint">
+        操作：按住踏板圆盘并拖拽旋转。<br />
+        硬件模拟：每 1 秒采样一次 v_hw；停踩时 v_hw 直接变 0。<br />
+        惯性：停踩边沿进入滑行一次，v(t)=v0*exp(-(t/τ)^γ)，γ 固定为 2（尾段更陡）。<br />
+        刹车：按住立即归零并停住（清掉 lastNonZeroSpeed，避免松刹后继续滑）。
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      // ---------- Helpers ----------
+      const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+      const fmt = (x, d = 3) => Number.isFinite(x) ? x.toFixed(d) : "NaN";
+
+      // ---------- DOM ----------
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d');
+
+      const tauNum = document.getElementById('tauNum');
+      const tauRange = document.getElementById('tauRange');
+      const scaleNum = document.getElementById('scaleNum');
+      const vmaxNum = document.getElementById('vmaxNum');
+      const epsNum = document.getElementById('epsNum');
+      const resetBtn = document.getElementById('resetBtn');
+      const toggleTrailBtn = document.getElementById('toggleTrailBtn');
+
+      const brakeBtn = document.getElementById('brakeBtn');
+
+      // keep tau inputs in sync
+      function syncTau(from) {
+        const v = parseFloat(from.value);
+        tauNum.value = v;
+        tauRange.value = v;
+      }
+      tauNum.addEventListener('input', () => syncTau(tauNum));
+      tauRange.addEventListener('input', () => syncTau(tauRange));
+
+      // ---------- State ----------
+      let W = 0, H = 0, DPR = 1;
+      function resize() {
+        DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        W = Math.floor(canvas.clientWidth * DPR);
+        H = Math.floor(canvas.clientHeight * DPR);
+        canvas.width = W; canvas.height = H;
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+      function updateTrailToggleUI() {
+        if (showTrail) {
+          toggleTrailBtn.classList.add('on');
+          toggleTrailBtn.textContent = "隐藏轨迹";
+        } else {
+          toggleTrailBtn.classList.remove('on');
+          toggleTrailBtn.textContent = "显示轨迹";
+        }
+      }
+
+      // 小人IK系统
+      function solve2LinkIK(hip, foot, L1, L2, kneeDir) {
+        // kneeDir: {x,y} 一个指向“膝盖应该朝向”的方向（单位向量最好）
+        const dx = foot.x - hip.x;
+        const dy = foot.y - hip.y;
+        let d = Math.hypot(dx, dy);
+
+        const minD = Math.abs(L1 - L2) + 3.0;
+        const maxD = (L1 + L2) - 3.0;
+        d = Math.max(minD, Math.min(maxD, d));
+
+        const base = Math.atan2(dy, dx);
+
+        const cosA = (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d);
+        const A = Math.acos(Math.max(-1, Math.min(1, cosA)));
+
+        // 两个候选膝盖（+A / -A）
+        const ang1 = base + A;
+        const ang2 = base - A;
+
+        const knee1 = { x: hip.x + Math.cos(ang1) * L1, y: hip.y + Math.sin(ang1) * L1 };
+        const knee2 = { x: hip.x + Math.cos(ang2) * L1, y: hip.y + Math.sin(ang2) * L1 };
+
+        // 选一个“更符合 kneeDir 方向”的膝盖（稳定，不翻折）
+        const score1 = (knee1.x - hip.x) * kneeDir.x + (knee1.y - hip.y) * kneeDir.y;
+        const score2 = (knee2.x - hip.x) * kneeDir.x + (knee2.y - hip.y) * kneeDir.y;
+
+        return { knee: (score1 >= score2) ? knee1 : knee2 };
+      }
+
+
+      // Pedal geometry (in world pixels)
+      const pedal = {
+        cx: 0, cy: 0,
+        r: 128,
+        angle: 0,              // rad
+        omega: 0,              // rad/s (continuous)
+        dragging: false,
+        lastPointerAngle: 0,   // rad
+        lastMoveT: 0,          // ms
+        omegaSmooth: 0,
+      };
+
+      // Bike state (1D along track)
+      const bike = {
+        x: 0,        // meters
+        vUsed: 0,    // m/s used by presentation
+      };
+
+      // "Hardware" sampling (every 1 second)
+      let v_continuous = 0;     // m/s continuous from omega
+      let v_hw = 0;             // m/s sampled each second (simulated hardware)
+      let lastNonZeroSpeed = 0; // m/s cached
+      let hardwareDistance = 0; // meters (only from v_hw each second)
+      let sampleAccum = 0;      // seconds since last sample
+      let vInt = 0;             // ∫ v_continuous dt over current 1s window
+      let tInt = 0;             // ∫ dt over current 1s window
+
+
+      // Inertia / coasting
+      let isCoasting = false;
+      let coastSpeed = 0;       // m/s internal
+      let coastDistance = 0;    // meters (only during coasting)
+      let coastT = 0;           // seconds since coasting started
+      const gamma = 2.0;        // 固定：尾段更陡（不暴露 UI）
+
+      // Presentation distance (integrated from vUsed each frame)
+      let gameDistance = 0;
+
+      // State machine edge detection
+      let pedalingPrev = false;
+
+      // Brake
+      let braking = false;
+
+      // UI/visual extras
+      let showTrail = true;
+      const trail = []; // store recent bike meter x
+      const MAX_TRAIL = 180;
+
+      // ---------- Controls ----------
+      resetBtn.addEventListener('click', () => {
+        bike.x = 0;
+        gameDistance = 0;
+        hardwareDistance = 0;
+        coastDistance = 0;
+        trail.length = 0;
+      });
+
+      updateTrailToggleUI();
+
+      toggleTrailBtn.addEventListener('click', () => {
+        showTrail = !showTrail;
+        updateTrailToggleUI();
+      });
+
+      // Brake: press & hold
+      const setBraking = (v) => {
+        braking = v;
+
+        // 用按钮态作为唯一反馈（不显示状态文字）
+        brakeBtn.classList.toggle('active', braking);
+
+        if (braking) {
+          // hard stop immediately
+          v_hw = 0;
+          v_continuous = 0;
+          isCoasting = false;
+          coastSpeed = 0;
+          coastT = 0;
+          bike.vUsed = 0;
+          lastNonZeroSpeed = 0;
+
+          // 如果你启用了 1s 平均（方案B）
+          if (typeof vInt !== "undefined") vInt = 0;
+          if (typeof tInt !== "undefined") tInt = 0;
+        }
+      };
+
+      brakeBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); setBraking(true); });
+      brakeBtn.addEventListener('pointerup', (e) => { e.preventDefault(); setBraking(false); });
+      brakeBtn.addEventListener('pointerleave', (e) => { e.preventDefault(); setBraking(false); });
+      brakeBtn.addEventListener('pointercancel', (e) => { e.preventDefault(); setBraking(false); });
+
+      // ---------- Pointer handling for pedal ----------
+      function pedalHit(px, py) {
+        // 1) 圆盘热区
+        const dx = px - pedal.cx, dy = py - pedal.cy;
+        const inDisc = (dx * dx + dy * dy) <= (pedal.r * pedal.r);
+
+        // 2) 末端旋钮热区（末端点 + 半径）
+        // drawPedal 里末端旋钮是：r-14 的位置，旋钮半径 8
+        // 这里做一个更容易点的热区：旋钮半径*2.2（你也可调）
+        const R = pedal.r * DPR;
+        const knobDist = (R - 14 * DPR);
+        const knobX = pedal.cx + Math.cos(pedal.angle) * knobDist;
+        const knobY = pedal.cy + Math.sin(pedal.angle) * knobDist;
+
+        const knobHitR = 8 * DPR * 2.2; // 热区放大
+        const kdx = px - knobX, kdy = py - knobY;
+        const inKnob = (kdx * kdx + kdy * kdy) <= (knobHitR * knobHitR);
+
+        return inDisc || inKnob;
+      }
+
+
+      function pointerPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) * DPR;
+        const y = (e.clientY - rect.top) * DPR;
+        return { x, y };
+      }
+
+      canvas.addEventListener('pointerdown', (e) => {
+        const p = pointerPos(e);
+        if (!pedalHit(p.x, p.y)) return;
+        canvas.setPointerCapture(e.pointerId);
+        pedal.dragging = true;
+        const a = Math.atan2(p.y - pedal.cy, p.x - pedal.cx);
+        pedal.lastPointerAngle = a;
+        pedal.lastMoveT = performance.now();
+      });
+
+      canvas.addEventListener('pointermove', (e) => {
+        if (!pedal.dragging) return;
+        const p = pointerPos(e);
+        const now = performance.now();
+        const a = Math.atan2(p.y - pedal.cy, p.x - pedal.cx);
+
+        // shortest signed angular difference
+        let da = a - pedal.lastPointerAngle;
+        while (da > Math.PI) da -= Math.PI * 2;
+        while (da < -Math.PI) da += Math.PI * 2;
+
+        const dt = Math.max(0.001, (now - pedal.lastMoveT) / 1000);
+        pedal.angle += da;
+
+        // raw omega from pointer
+        const omegaRaw = da / dt;
+
+        // smooth omega a bit for stability
+        const smooth = 0.25;
+        pedal.omegaSmooth = pedal.omegaSmooth * (1 - smooth) + omegaRaw * smooth;
+
+        pedal.lastPointerAngle = a;
+        pedal.lastMoveT = now;
+      });
+
+      function stopDragging() { pedal.dragging = false; }
+      canvas.addEventListener('pointerup', stopDragging);
+      canvas.addEventListener('pointercancel', stopDragging);
+
+      // ---------- Simulation loop ----------
+      let lastT = performance.now();
+      let lastDt = 0;
+
+      function tick() {
+        const now = performance.now();
+        const dt = Math.min(0.05, Math.max(0.001, (now - lastT) / 1000)); // clamp
+        lastT = now;
+        lastDt = dt;
+
+        // Layout pedal position
+        pedal.cx = Math.floor(W * 0.5);
+        pedal.cy = Math.floor(H * 0.86);
+
+        // If braking, force everything to stop (visual still updates)
+        if (braking) {
+          pedal.omegaSmooth = 0;
+          pedal.omega = 0;
+          bike.vUsed = 0;
+          // no movement integration while braking
+          draw();
+          updateKV();
+          requestAnimationFrame(tick);
+          return;
+        }
+
+        // If not dragging, decay pedal omega quickly
+        if (!pedal.dragging) {
+          const k = 10; // bigger => faster stop
+          pedal.omegaSmooth *= Math.exp(-k * dt);
+          if (Math.abs(pedal.omegaSmooth) < 0.02) pedal.omegaSmooth = 0;
+        }
+
+        pedal.omega = pedal.omegaSmooth;
+
+        // Continuous speed mapping from omega -> v_continuous
+        const scale = parseFloat(scaleNum.value);
+        const vmax = parseFloat(vmaxNum.value);
+        const eps = parseFloat(epsNum.value);
+
+        // Use abs value so either direction counts
+        v_continuous = clamp(Math.abs(pedal.omega) * scale, 0, vmax);
+        // accumulate for 1-second average speed
+        vInt += v_continuous * dt;
+        tInt += dt;
+
+
+        // "Hardware sampling" every 1 second (use 1-second average)
+        sampleAccum += dt;
+        if (sampleAccum >= 1.0) {
+          const steps = Math.floor(sampleAccum / 1.0);
+
+          for (let i = 0; i < steps; i++) {
+            // Average speed over the last window
+            const avg = (tInt > 0) ? (vInt / tInt) : 0;
+
+            // Simulate real hardware behavior:
+            // if user effectively stopped at sampling time -> reports 0 directly
+            v_hw = (v_continuous > eps) ? avg : 0;
+
+            if (v_hw > eps) lastNonZeroSpeed = v_hw;
+
+            // hardwareDistance only accumulates by v_hw each second
+            hardwareDistance += v_hw * 1.0;
+
+            // reset integrator for next 1-second window
+            vInt = 0;
+            tInt = 0;
+          }
+
+          sampleAccum -= steps * 1.0;
+        }
+
+
+        // State machine
+        const pedaling = (v_hw > eps);
+
+        // Enter coasting only on edge: pedaling -> not pedaling
+        if (!pedaling && pedalingPrev) {
+          if (lastNonZeroSpeed > eps) {
+            isCoasting = true;
+            coastT = 0;
+            coastSpeed = lastNonZeroSpeed; // v0
+          }
+        }
+
+        // If pedaling resumes, exit coasting immediately
+        if (pedaling) {
+          isCoasting = false;
+          coastSpeed = 0;
+          coastT = 0;
+          bike.vUsed = v_hw;
+        } else {
+          if (isCoasting) {
+            coastT += dt;
+            const tau = Math.max(0.2, parseFloat(tauNum.value));
+            // stretched exponential: v(t)=v0*exp(-(t/tau)^gamma)
+            coastSpeed = lastNonZeroSpeed * Math.exp(-Math.pow(coastT / tau, gamma));
+
+            if (coastSpeed < eps) {
+              coastSpeed = 0;
+              isCoasting = false;
+              // important: prevent “re-coast” while still stopped
+              // lastNonZeroSpeed 保留也没关系，因为我们只在 pedaling->not pedaling 边沿触发进入滑行
+            }
+            bike.vUsed = coastSpeed;
+          } else {
+            bike.vUsed = 0;
+          }
+        }
+
+        // Integrate distances (presentation)
+        const dx = bike.vUsed * dt;
+        bike.x += dx;
+        gameDistance += dx;
+
+        // coastDistance only during coasting
+        if (isCoasting && bike.vUsed > 0) coastDistance += dx;
+
+        // Trail
+        if (showTrail) {
+          trail.push(bike.x);
+          if (trail.length > MAX_TRAIL) trail.shift();
+        } else {
+          trail.length = 0;
+        }
+
+        pedalingPrev = pedaling;
+
+        draw();
+        updateKV();
+        requestAnimationFrame(tick);
+      }
+
+      // ---------- Rendering ----------
+      function draw() {
+        ctx.clearRect(0, 0, W, H);
+
+        // Track baseline
+        const trackY = Math.floor(H * 0.58);
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(232,238,252,0.16)';
+        ctx.lineWidth = 2 * DPR;
+        ctx.beginPath();
+        ctx.moveTo(0, trackY);
+        ctx.lineTo(W, trackY);
+        ctx.stroke();
+
+        // meters -> pixels
+        const pxPerMeter = (W * 0.65) / 60;
+        const camCenterX = Math.floor(W * 0.5);
+        const bikePxX = camCenterX;
+        const offsetPx = bike.x * pxPerMeter;
+
+        // tick marks
+        ctx.strokeStyle = 'rgba(232,238,252,0.10)';
+        ctx.lineWidth = 1 * DPR;
+        const tickSpacingM = 5;
+        const tickSpacingPx = tickSpacingM * pxPerMeter;
+        const startTick = Math.floor((offsetPx - camCenterX) / tickSpacingPx) - 1;
+        const endTick = startTick + 50;
+        for (let i = startTick; i < endTick; i++) {
+          const x = i * tickSpacingPx - offsetPx + camCenterX;
+          if (x < -20 || x > W + 20) continue;
+          ctx.beginPath();
+          ctx.moveTo(x, trackY - 10 * DPR);
+          ctx.lineTo(x, trackY + 10 * DPR);
+          ctx.stroke();
+          ctx.fillStyle = 'rgba(232,238,252,0.35)';
+          ctx.font = `${12 * DPR}px system-ui`;
+          const m = i * tickSpacingM;
+          ctx.fillText(`${m}m`, x + 4 * DPR, trackY + 26 * DPR);
+        }
+
+        // Trail
+        if (trail.length > 2) {
+          ctx.strokeStyle = 'rgba(120,200,255,0.35)';
+          ctx.lineWidth = 2 * DPR;
+          ctx.beginPath();
+          for (let i = 0; i < trail.length; i++) {
+            const tx = (trail[i] * pxPerMeter - offsetPx + camCenterX);
+            const ty = trackY - 18 * DPR - Math.sin(i / 6) * 2 * DPR;
+            if (i === 0) ctx.moveTo(tx, ty); else ctx.lineTo(tx, ty);
+          }
+          ctx.stroke();
+        }
+
+        // Draw bike + rider
+        drawBikeRider(bikePxX, trackY - 6 * DPR);
+
+        // Speed indicator
+        ctx.fillStyle = isCoasting ? 'rgba(255,210,120,0.92)' : 'rgba(120,255,180,0.9)';
+        ctx.font = `${14 * DPR}px system-ui`;
+        ctx.fillText(
+          `v_used: ${fmt(bike.vUsed, 2)} m/s ${isCoasting ? '(滑行)' : (v_hw > parseFloat(epsNum.value) ? '(骑行)' : '(停止)')}`,
+          bikePxX - 90 * DPR,
+          trackY - 120 * DPR
+        );
+
+        ctx.restore();
+
+        drawPedal();
+      }
+
+      function drawBikeRider(x, groundY) {
+        const s = DPR;
+        const wheelR = 16 * s;
+        const wheelY = groundY - wheelR;
+
+        const backX = x - 34 * s;
+        const frontX = x + 34 * s;
+
+        // wheels
+        ctx.save();
+        ctx.strokeStyle = 'rgba(232,238,252,0.85)';
+        ctx.lineWidth = 3 * s;
+        ctx.beginPath(); ctx.arc(backX, wheelY, wheelR, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(frontX, wheelY, wheelR, 0, Math.PI * 2); ctx.stroke();
+
+        // frame (simple)
+        ctx.strokeStyle = 'rgba(232,238,252,0.75)';
+        ctx.lineWidth = 4 * s;
+        ctx.lineCap = 'round';
+
+        const seatX = x - 6 * s, seatY = wheelY - 36 * s;   // 原来 -28*s -> -36*s
+
+        const headX = x + 18 * s, headY = wheelY - 42 * s;
+        const crankX = x - 2 * s, crankY = wheelY - 10 * s;
+
+        // ===== IK Pedaling Legs (stable knee direction) =====
+        // Hip positions (raise a bit, separate L/R)
+        const hipL = { x: seatX - 10 * s, y: seatY - 2 * s };
+        const hipR = { x: seatX + 4 * s, y: seatY - 2 * s };
+
+
+        // Pedal path around crank (slightly elliptical for realism)
+        const pedalR = 15 * s;
+        const footOffset = 4 * s;
+
+        const pedalAng = pedal.angle;
+        const ex = 1.00;     // x scale
+        const ey = 1.18;     // y scale (ellipse)
+
+        // Clamp foot targets a bit so they don't go too far
+        function footAt(ang) {
+          return {
+            x: crankX + Math.cos(ang) * (pedalR + footOffset) * ex,
+            y: crankY + Math.sin(ang) * (pedalR + footOffset) * ey
+          };
+        }
+
+        const footL = footAt(pedalAng);
+        const footR = footAt(pedalAng + Math.PI);
+
+        // Segment lengths (thigh slightly longer than shin)
+        const thighL = 26 * s;
+        const shinL = 22 * s;
+
+
+        // Knee direction: make knees generally point forward (to the right)
+        const kneeDirL = { x: 1, y: 0.15 };
+        const kneeDirR = { x: 1, y: 0.15 };
+
+        const ikL = solve2LinkIK(hipL, footL, thighL, shinL, kneeDirL);
+        const ikR = solve2LinkIK(hipR, footR, thighL, shinL, kneeDirR);
+
+        // Draw thighs + shins
+        ctx.strokeStyle = 'rgba(232,238,252,0.88)';
+        ctx.lineWidth = 4 * s;
+        ctx.lineCap = 'round';
+
+        // left leg
+        line(hipL.x, hipL.y, ikL.knee.x, ikL.knee.y);
+        line(ikL.knee.x, ikL.knee.y, footL.x, footL.y);
+
+        // right leg
+        line(hipR.x, hipR.y, ikR.knee.x, ikR.knee.y);
+        line(ikR.knee.x, ikR.knee.y, footR.x, footR.y);
+
+        // feet markers (small)
+        ctx.fillStyle = 'rgba(232,238,252,0.92)';
+        ctx.beginPath(); ctx.arc(footL.x, footL.y, 3.2 * s, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(footR.x, footR.y, 3.2 * s, 0, Math.PI * 2); ctx.fill();
+
+        ctx.fillStyle = 'rgba(232,238,252,0.75)';
+        ctx.beginPath(); ctx.arc(ikL.knee.x, ikL.knee.y, 2.6 * s, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(ikR.knee.x, ikR.knee.y, 2.6 * s, 0, Math.PI * 2); ctx.fill();
+
+        ctx.fillStyle = 'rgba(232,238,252,0.6)';
+        ctx.beginPath(); ctx.arc(hipL.x, hipL.y, 2.2 * s, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(hipR.x, hipR.y, 2.2 * s, 0, Math.PI * 2); ctx.fill();
+
+
+
+
+        // triangle frame
+        line(backX, wheelY, crankX, crankY);
+        line(crankX, crankY, frontX, wheelY);
+        line(backX, wheelY, seatX, seatY);
+        line(seatX, seatY, frontX, wheelY);
+        // handlebar stem
+        line(frontX, wheelY, headX, headY);
+
+        // seat & handle
+        ctx.lineWidth = 5 * s;
+        line(seatX - 10 * s, seatY, seatX + 10 * s, seatY);
+        line(headX - 10 * s, headY, headX + 6 * s, headY - 6 * s);
+
+        // rider (stick-ish)
+        ctx.lineWidth = 4 * s;
+        // body
+        line(seatX, seatY - 2 * s, headX - 2 * s, headY - 6 * s);
+        // leg to crank
+        line(seatX - 2 * s, seatY + 6 * s, crankX, crankY + 2 * s);
+        // arm to handle
+        line(headX - 10 * s, headY - 2 * s, headX + 2 * s, headY - 6 * s);
+
+        // head
+        ctx.fillStyle = 'rgba(232,238,252,0.92)';
+        ctx.beginPath(); ctx.arc(headX - 2 * s, headY - 14 * s, 8 * s, 0, Math.PI * 2); ctx.fill();
+
+        // crank + pedal indicator spin
+        ctx.strokeStyle = 'rgba(120,200,255,0.9)';
+        ctx.lineWidth = 4 * s;
+        const a = pedal.angle;
+        ctx.beginPath();
+        ctx.moveTo(crankX, crankY);
+        ctx.lineTo(crankX + Math.cos(a) * 14 * s, crankY + Math.sin(a) * 14 * s);
+        ctx.stroke();
+
+        ctx.restore();
+
+        function line(x1, y1, x2, y2) {
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        }
+      }
+
+      function drawPedal() {
+        const r = pedal.r * DPR;
+        const cx = pedal.cx, cy = pedal.cy;
+
+        ctx.save();
+        ctx.lineWidth = 3 * DPR;
+        ctx.strokeStyle = 'rgba(232,238,252,0.25)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(120,200,255,0.08)';
+        ctx.beginPath(); ctx.arc(cx, cy, r - 6 * DPR, 0, Math.PI * 2); ctx.fill();
+
+        const a = pedal.angle;
+        const x2 = cx + Math.cos(a) * (r - 14 * DPR);
+        const y2 = cy + Math.sin(a) * (r - 14 * DPR);
+
+        ctx.strokeStyle = pedal.dragging ? 'rgba(120,255,180,0.9)' : 'rgba(120,200,255,0.75)';
+        ctx.lineWidth = 5 * DPR;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(232,238,252,0.92)';
+        ctx.beginPath(); ctx.arc(x2, y2, 8 * DPR, 0, Math.PI * 2); ctx.fill();
+
+        ctx.fillStyle = 'rgba(232,238,252,0.7)';
+        ctx.font = `${13 * DPR}px system-ui`;
+        ctx.fillText('模拟踏板（拖拽旋转）', cx - 62 * DPR, cy + r + 22 * DPR);
+        ctx.restore();
+      }
+
+      // ---------- UI fields ----------
+      const kvEl = document.getElementById('kv');
+      const fieldGroups = [
+        {
+          title: "硬件模拟数据（1s 采样）",
+          items: [
+            ["<span class='star'>★</span> 硬件速度 v_hw (m/s)", () => fmt(v_hw, 3)],
+            ["<span class='star'>★</span> 硬件累积距离 hardwareDistance (m)", () => fmt(hardwareDistance, 3)],
+            //["最后非零速度 lastNonZeroSpeed (m/s)", () => fmt(lastNonZeroSpeed, 3)],
+            //["采样累积时间 sampleAccum (s)", () => fmt(sampleAccum, 3)],
+          ]
+        },
+
+        {
+          title: "惯性滑行",
+          items: [
+            ["<span class='star'>★</span> 是否滑行 isCoasting", () => String(isCoasting)],
+            ["<span class='star'>★</span> 滑行已进行时间 coastT (s)", () => fmt(coastT, 3)],
+            ["<span class='star'>★</span> 滑行速度 coastSpeed (m/s)", () => fmt(coastSpeed, 3)],
+            ["<span class='star'>★</span> 滑行距离 coastDistance (m)", () => fmt(coastDistance, 3)],
+          ]
+        },
+        {
+          title: "表现层结果",
+          items: [
+            ["<span class='star'>★</span> 表现层速度 v_used (m/s)", () => fmt(bike.vUsed, 3)],
+            ["<span class='star'>★</span> 表现层距离 gameDistance (m)", () => fmt(gameDistance, 3)],
+            ["<span class='star'>★</span> UI总距离 totalDistanceForUI (m)", () =>
+              fmt(hardwareDistance + coastDistance, 3)],
+          ]
+        },
+        {
+          title: "时间与输入",
+          items: [
+            ["dt (s)", () => fmt(lastDt, 4)],
+            ["踏板角度 pedalAngle (deg)", () => fmt((pedal.angle * 180 / Math.PI) % 360, 2)],
+            ["踏板角速度 pedalAngularVelocity (rad/s)", () => fmt(pedal.omega, 3)],
+            ["连续速度 v_continuous (m/s)", () => fmt(v_continuous, 3)],
+          ]
+        },
+        {
+          title: "参数 / 状态",
+          items: [
+            ["惯性量 τ (s)", () => fmt(parseFloat(tauNum.value), 2)],
+            ["曲线指数 γ（固定）", () => fmt(gamma, 1)],
+            ["刹车 braking", () => String(braking)],
+          ]
+        }
+      ];
+
+
+      kvEl.innerHTML = fieldGroups.map(g => {
+        const items = g.items.map(([k]) =>
+          `<div class="kv">
+            <div class="k">${k}</div>
+            <div class="v" data-k="${k}"></div>
+          </div>`
+        ).join("");
+
+        return `
+          <div class="group-title">${g.title}</div>
+          ${items}
+        `;
+      }).join("");
+
+      const kvMap = new Map(
+        [...kvEl.querySelectorAll('[data-k]')].map(el => [el.dataset.k, el])
+      );
+
+      function updateKV() {
+        for (const group of fieldGroups) {
+          for (const [k, getter] of group.items) {
+            const el = kvMap.get(k);
+            if (el) el.textContent = getter();
+          }
+        }
+      }
+
+
+      // start
+      requestAnimationFrame(tick);
+    })();
+  </script>
+</body>
+
+</html>
