@@ -381,156 +381,180 @@
             font-size:12px;
             line-height:1.4;
           ">// ================================
-// Unity / App：硬件1s采样 + 惯性滑行（推荐实现）
-// 目标：
-// - 表现层移动永远用 v_used（由 v_hw 或滑行速度产生）
-// - 硬件侧停踩：v_hw 在采样时直接归0
-// - 停踩后：以停止瞬间速度 v0 开始滑行，直至 0
-// - 滑行距离 coastDistance 单独累计（用于 UI / 报告）
-// ================================
+// =====================================================
+// Unity：当前硬件可实现版（v_hw + dist_hw）+ 滑行追赶（catch-up）
+// 
+// 硬件输入（1 秒频率蓝牙上报）：
+// - v_hw    : m/s，硬件速度；停踩后直接上报 0
+// - dist_hw : m，硬件累积骑行距离（硬件口径）
+//
+// 设计目标：
+// 1. 表现层移动使用 v_used（硬件速度 或 滑行速度）
+// 2. 用户停踩后进入滑行，按指数衰减至 0
+// 3. 滑行过程中再次踩踏：
+//    - 在硬件速度/距离“追上”滑行速度前，不让表现层突然降速
+//    - 当硬件有效速度 ≥ 滑行速度时，结束滑行，切回硬件主导
+// 4. 距离口径严格分离：
+//    - dist_hw：完全以硬件累积距离为准
+//    - coastDistance：仅记录滑行阶段产生的补偿距离
+// =====================================================
 
-// ---- 参数 ----
-public float tau = 2.5f;     // 惯性量（秒，越大越“滑”）
-public float gamma = 2.0f;   // 曲线指数（固定>1，尾段更陡）
-public float eps = 0.05f;    // 速度阈值（认为停止）
-public bool showTrail = true;
 
-// ---- 输入（来自硬件） ----
-// continuousSpeed: 每帧估算/或蓝牙更高频速度（如果只有1Hz也可直接用）
-// 但 v_hw 需要按 1 秒采样口径输出给表现层逻辑
-float continuousSpeed;   // m/s
-float v_hw = 0f;         // m/s（硬件1s上报口径）
-float lastNonZeroSpeed = 0f;
+// ---------- 可调参数 ----------
+public float tau = 2.5f;     // 惯性量（秒，越大滑行越远）
+public float gamma = 2.0f;   // 衰减曲线指数（>1，推荐 2.0，尾段更陡）
+public float eps = 0.05f;    // 速度阈值（认为 0 的最小速度）
+public bool braking = false; // 刹车（按住立即停）
 
-// ---- 1s平均采样（方案B） ----
-float sampleAccum = 0f;  // 0~1s
-float vInt = 0f;         // ∫v dt
-float tInt = 0f;         // ∫dt
 
-// ---- 距离 ----
-float hardwareDistance = 0f; // 仅按 v_hw * 1s 累计（硬件口径）
-float gameDistance = 0f;     // 表现层按 v_used * dt 累计（表现口径）
-float coastDistance = 0f;    // 仅滑行阶段累计（用于 UI/报告）
-float totalDistanceForUI => hardwareDistance + coastDistance;
+ // ---------- 硬件输入（1Hz） ----------
+public float v_hw = 0f;      // 硬件速度（m/s）
+public float dist_hw = 0f;   // 硬件累积距离（m）
 
-// ---- 滑行状态机（边沿触发，防跳速） ----
-bool pedalingPrev = false;
-bool isCoasting = false;
-float coastT = 0f;
-float v0 = 0f;              // 停踩瞬间滑行初速
+
+ // ---------- 基于硬件距离的“有效速度”估算 ----------
+float lastDistHw = 0f;       // 上一次记录的硬件距离
+float lastDistTime = 0f;     // 上一次记录距离的时间（Time.time）
+float v_hw_eff = 0f;         // 由 dist_hw 增量估算的硬件有效速度（m/s）
+
+
+ // ---------- 滑行状态 ----------
+bool pedalingPrev = false;   // 上一帧是否在踩踏
+
+bool isCoasting = false;     // 是否处于滑行状态
+float coastT = 0f;           // 滑行已持续时间
+float v0 = 0f;               // 停踩瞬间的滑行初速
 float coastSpeed = 0f;       // 当前滑行速度
-float v_used = 0f;           // 表现层使用速度（驱动位移）
+float lastNonZeroSpeed = 0f; // 最近一次非零硬件速度（用于进入滑行）
 
-// ---- 刹车（按住） ----
-bool braking = false;
+
+ // ---------- 表现层输出 ----------
+float v_used = 0f;           // 实际用于驱动角色移动的速度
+
+float coastDistance = 0f;    // 仅滑行阶段累计的距离（补偿用）
+float gameDistance = 0f;     // 表现层累计距离（调试用）
+float totalDistanceForUI => dist_hw + coastDistance; // UI 展示总距离
+
+
+void Start()
+{
+    // 初始化硬件距离采样基线
+    lastDistHw = dist_hw;
+    lastDistTime = Time.time;
+}
+
 
 void Update()
 {
     float dt = Time.deltaTime;
 
-    // ==========================
-    // 1) continuousSpeed 更新
-    //    - 如果你有更高频硬件速度，用它
-    //    - 如果只有1Hz v_hw，就让 continuousSpeed=v_hw 也能跑
-    // ==========================
-    // continuousSpeed = ...
-
-    // 1s平均积分（方案B）
-    vInt += continuousSpeed * dt;
-    tInt += dt;
-
-    // 1s采样
-    sampleAccum += dt;
-    if (sampleAccum >= 1f)
-    {
-        int steps = Mathf.FloorToInt(sampleAccum / 1f);
-        for (int i = 0; i < steps; i++)
-        {
-            float avg = (tInt > 0f) ? (vInt / tInt) : 0f;
-
-            // 硬件口径：停踩 -> 采样时直接归0
-            v_hw = (continuousSpeed > eps) ? avg : 0f;
-
-            if (v_hw > eps) lastNonZeroSpeed = v_hw;
-            hardwareDistance += v_hw * 1f;
-
-            // reset window
-            vInt = 0f;
-            tInt = 0f;
-        }
-        sampleAccum -= steps * 1f;
-    }
-
-    // ==========================
-    // 2) 刹车：立即停（并清掉v0，防松刹后继续滑）
-    // ==========================
+    // 1) 刹车：立即停止一切运动，并清空滑行状态
     if (braking)
     {
-        v_hw = 0f;
         v_used = 0f;
         isCoasting = false;
         coastT = 0f;
         coastSpeed = 0f;
         v0 = 0f;
         lastNonZeroSpeed = 0f;
-        return; // 本帧不移动
+        v_hw_eff = 0f;
+
+        // 重置硬件距离采样基线，避免刹车后出现异常速度
+        lastDistHw = dist_hw;
+        lastDistTime = Time.time;
+        return;
     }
 
-    // ==========================
-    // 3) 滑行状态机（边沿触发一次）
-    // ==========================
-    bool pedaling = (v_hw > eps);
+    // 2) 当硬件累积距离发生变化时，估算硬件“有效速度”
+    //    说明：dist_hw 只在真实产生骑行距离时才会增长
+    if (dist_hw != lastDistHw)
+    {
+        float now = Time.time;
+        float deltaDist = dist_hw - lastDistHw;
+        float deltaT = Mathf.Max(0.001f, now - lastDistTime);
 
-    // 进入滑行：只在 pedaling true -> false 的边沿触发
+        // 正常情况下 dist_hw 只增不减；若出现回退（如重置），视为 0
+        if (deltaDist > 0f)
+            v_hw_eff = deltaDist / deltaT;
+        else
+            v_hw_eff = 0f;
+
+        lastDistHw = dist_hw;
+        lastDistTime = now;
+    }
+
+    // 3) 用于游戏逻辑的“硬件速度”
+    //    - v_hw：硬件直接上报的速度（1Hz）
+    //    - v_hw_eff：由距离增量估算的有效速度
+    //    取二者中的较大值，减少 1 秒延迟感
+    float v_hw_game = Mathf.Max(v_hw, v_hw_eff);
+
+    // 记录最近一次非零硬件速度（用于进入滑行）
+    if (v_hw_game > eps)
+        lastNonZeroSpeed = v_hw_game;
+
+    bool pedaling = (v_hw_game > eps);
+
+    // 4) 进入滑行：仅在“踩踏 → 停踩”的边沿触发一次
+    //    防止反复进入滑行导致速度跳变
     if (!pedaling && pedalingPrev)
     {
         if (lastNonZeroSpeed > eps)
         {
             isCoasting = true;
             coastT = 0f;
-            v0 = lastNonZeroSpeed; // 滑行初速
+            v0 = lastNonZeroSpeed;
         }
     }
 
-    // 踩踏恢复：退出滑行
-    if (pedaling)
+    // 5) 更新滑行速度（指数衰减）
+    if (isCoasting)
+    {
+        coastT += dt;
+        coastSpeed = v0 * Mathf.Exp(
+            -Mathf.Pow(coastT / Mathf.Max(0.2f, tau), gamma)
+        );
+
+        if (coastSpeed < eps)
+        {
+            coastSpeed = 0f;
+            isCoasting = false;
+        }
+    }
+    else
+    {
+        coastSpeed = 0f;
+    }
+
+    // 6) 滑行追赶（catch-up）判定：
+    //    当硬件有效速度 >= 当前滑行速度时，
+    //    说明硬件已经“追上”，结束滑行，切回硬件主导
+    if (isCoasting && v_hw_game > eps && v_hw_game >= coastSpeed)
     {
         isCoasting = false;
         coastT = 0f;
         coastSpeed = 0f;
-        v_used = v_hw;
-    }
-    else
-    {
-        if (isCoasting)
-        {
-            coastT += dt;
-            coastSpeed = v0 * Mathf.Exp(-Mathf.Pow(coastT / Mathf.Max(0.2f, tau), gamma));
-
-            if (coastSpeed < eps)
-            {
-                coastSpeed = 0f;
-                isCoasting = false;
-            }
-            v_used = coastSpeed;
-        }
-        else
-        {
-            v_used = 0f;
-        }
+        v0 = 0f;
     }
 
-    // ==========================
-    // 4) 表现层推进 & 距离累计
-    // ==========================
-    float delta = v_used * dt;
-    transform.position += transform.forward * delta;
+    // 7) 表现层最终速度：
+    //    始终取“当前更快的那个”，避免重新踩踏时突然降速
+    v_used = Mathf.Max(coastSpeed, v_hw_game);
 
-    gameDistance += delta;
-    if (isCoasting && v_used > 0f) coastDistance += delta;
+    // 8) 表现层位移
+    float deltaMove = v_used * dt;
+    transform.position += transform.forward * deltaMove;
+    gameDistance += deltaMove;
+
+    // 9) 距离口径分离
+    //    - dist_hw：完全由硬件维护（Unity 不做积分）
+    //    - coastDistance：仅在滑行阶段，按滑行速度累计
+    if (coastSpeed > 0f)
+        coastDistance += coastSpeed * dt;
 
     pedalingPrev = pedaling;
 }
+
 </textarea>
       </div>
 
@@ -645,11 +669,13 @@ void Update()
       // "Hardware" sampling (every 1 second)
       let v_continuous = 0;     // m/s continuous from omega
       let v_hw = 0;             // m/s sampled each second (simulated hardware)
+      let v_hw_eff = 0;
       let lastNonZeroSpeed = 0; // m/s cached
       let hardwareDistance = 0; // meters (only from v_hw each second)
       let sampleAccum = 0;      // seconds since last sample
       let vInt = 0;             // ∫ v_continuous dt over current 1s window
       let tInt = 0;             // ∫ dt over current 1s window
+
 
 
       // Inertia / coasting
@@ -658,6 +684,8 @@ void Update()
       let coastDistance = 0;    // meters (only during coasting)
       let coastT = 0;           // seconds since coasting started
       const gamma = 2.0;        // 固定：尾段更陡（不暴露 UI）
+      let coastV0 = 0; // 滑行初速（冻结，不随踏板轻转而变）
+
 
       // Presentation distance (integrated from vUsed each frame)
       let gameDistance = 0;
@@ -805,9 +833,9 @@ void Update()
           pedal.omega = 0;
           bike.vUsed = 0;
           // no movement integration while braking
-          draw();
-          updateKV();
-          requestAnimationFrame(tick);
+          // draw();
+          // updateKV();
+          // requestAnimationFrame(tick);
           return;
         }
 
@@ -847,8 +875,10 @@ void Update()
 
             if (v_hw > eps) lastNonZeroSpeed = v_hw;
 
-            // hardwareDistance only accumulates by v_hw each second
+            // v_hw_eff = Δdist_hw / 1s  （dist_hw 在 web demo 对应 hardwareDistance）
+            const prevDist = hardwareDistance;
             hardwareDistance += v_hw * 1.0;
+            v_hw_eff = Math.max(0, (hardwareDistance - prevDist) / 1.0);
 
             // reset integrator for next 1-second window
             vInt = 0;
@@ -859,65 +889,73 @@ void Update()
         }
 
 
-        // State machine
-        const pedaling = (v_hw > eps);
+        // State machine (HW achievable + catch-up)
 
-        // Enter coasting only on edge: pedaling -> not pedaling
+        // 1) 硬件用于游戏的有效速度：max(上报速度, 由距离增量估算的有效速度)
+        const v_hw_game = Math.max(v_hw, v_hw_eff);
+
+        // pedaling 判断改为 v_hw_game
+        const pedaling = (v_hw_game > eps);
+
+        // 缓存最近一次非零硬件有效速度，用于滑行初速 v0
+        if (!isCoasting && v_hw_game > eps) lastNonZeroSpeed = v_hw_game;
+
+        // 2) 进入滑行：只在 pedaling -> not pedaling 的边沿触发一次
         if (!pedaling && pedalingPrev) {
           if (lastNonZeroSpeed > eps) {
             isCoasting = true;
             coastT = 0;
-            coastSpeed = lastNonZeroSpeed; // v0
+            coastV0 = lastNonZeroSpeed; // 冻结滑行初速
+            coastSpeed = coastV0;
           }
         }
 
-        // If pedaling resumes, exit coasting immediately
-        if (pedaling) {
-          isCoasting = false;
-          coastSpeed = 0;
-          coastT = 0;
-          bike.vUsed = v_hw;
+        // 3) 更新滑行速度（不管是否开始踩踏，都让滑行自然衰减）
+        if (isCoasting) {
+          coastT += dt;
+          const tau = Math.max(0.2, parseFloat(tauNum.value));
+          coastSpeed = coastV0 * Math.exp(-Math.pow(coastT / tau, gamma));
+
+          if (coastSpeed < eps) {
+            coastSpeed = 0;
+            isCoasting = false;
+            coastV0 = 0;
+          }
         } else {
-          if (isCoasting) {
-            coastT += dt;
-            const tau = Math.max(0.2, parseFloat(tauNum.value));
-            // stretched exponential: v(t)=v0*exp(-(t/tau)^gamma)
-            coastSpeed = lastNonZeroSpeed * Math.exp(-Math.pow(coastT / tau, gamma));
-
-            if (coastSpeed < eps) {
-              coastSpeed = 0;
-              isCoasting = false;
-              // important: prevent “re-coast” while still stopped
-              // lastNonZeroSpeed 保留也没关系，因为我们只在 pedaling->not pedaling 边沿触发进入滑行
-            }
-            bike.vUsed = coastSpeed;
-          } else {
-            bike.vUsed = 0;
-          }
+          coastSpeed = 0;
         }
+
+
+        // 4) catch-up：硬件有效速度追上滑行速度 → 结束滑行，切回硬件主导
+        if (isCoasting && v_hw_game > eps && v_hw_game >= coastSpeed) {
+          isCoasting = false;
+          coastT = 0;
+          coastSpeed = 0;
+          coastV0 = 0;
+        }
+
+
+        // 5) 表现层最终速度：始终取当前更快的那个（避免滑行中再踩踏突然掉速）
+        bike.vUsed = braking ? 0 : Math.max(v_hw_game, coastSpeed);
 
         // Integrate distances (presentation)
         const dx = bike.vUsed * dt;
         bike.x += dx;
         gameDistance += dx;
 
-        // coastDistance only during coasting
-        if (isCoasting && bike.vUsed > 0) coastDistance += dx;
-
-        // Trail
-        if (showTrail) {
-          trail.push(bike.x);
-          if (trail.length > MAX_TRAIL) trail.shift();
-        } else {
-          trail.length = 0;
+        // 6) 滑行距离口径：只按滑行速度累计（不要按 vUsed）
+        if (isCoasting && coastSpeed > 0) {
+          coastDistance += coastSpeed * dt;
         }
 
         pedalingPrev = pedaling;
 
+        // 这三句必须永远执行（每帧）
         draw();
         updateKV();
         requestAnimationFrame(tick);
       }
+
 
       // ---------- Rendering ----------
       function draw() {
@@ -961,17 +999,23 @@ void Update()
         }
 
         // Trail
-        if (trail.length > 2) {
-          ctx.strokeStyle = 'rgba(120,200,255,0.35)';
-          ctx.lineWidth = 2 * DPR;
-          ctx.beginPath();
-          for (let i = 0; i < trail.length; i++) {
-            const tx = (trail[i] * pxPerMeter - offsetPx + camCenterX);
-            const ty = trackY - 18 * DPR - Math.sin(i / 6) * 2 * DPR;
-            if (i === 0) ctx.moveTo(tx, ty); else ctx.lineTo(tx, ty);
+        if (showTrail) {
+          // trail push 应该在状态更新后、draw 前做（你原来就有）
+          if (trail.length > 2) {
+            ctx.strokeStyle = 'rgba(120,200,255,0.35)';
+            ctx.lineWidth = 2 * DPR;
+            ctx.beginPath();
+            for (let i = 0; i < trail.length; i++) {
+              const tx = (trail[i] * pxPerMeter - offsetPx + camCenterX);
+              const ty = trackY - 18 * DPR - Math.sin(i / 6) * 2 * DPR;
+              if (i === 0) ctx.moveTo(tx, ty); else ctx.lineTo(tx, ty);
+            }
+            ctx.stroke();
           }
-          ctx.stroke();
+        } else {
+          trail.length = 0;
         }
+
 
         // Draw bike + rider
         drawBikeRider(bikePxX, trackY - 6 * DPR);
@@ -1187,6 +1231,9 @@ void Update()
             ["<span class='star'>★</span> 表现层距离 gameDistance (m)", () => fmt(gameDistance, 3)],
             ["<span class='star'>★</span> UI总距离 totalDistanceForUI (m)", () =>
               fmt(hardwareDistance + coastDistance, 3)],
+            ["<span class='star'>★</span> 硬件有效速度 v_hw_eff (m/s)", () => fmt(v_hw_eff, 3)],
+            ["<span class='star'>★</span> 硬件用于游戏 v_hw_game (m/s)", () => fmt(Math.max(v_hw, v_hw_eff), 3)],
+
           ]
         },
         {
